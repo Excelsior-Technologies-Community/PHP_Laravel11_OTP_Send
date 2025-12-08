@@ -1,66 +1,201 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+# 🔐 Laravel 11 – OTP Login System (Email + Twilio SMS)
+![Laravel](https://img.shields.io/badge/Laravel-11-orange)
+![PHP](https://img.shields.io/badge/PHP-8.2-blue)
+![Twilio](https://img.shields.io/badge/Twilio-OTP-red)
+![Email](https://img.shields.io/badge/SMTP-Mail-green)
 
-## About Laravel
+A complete OTP-based authentication system using **Email (SMTP)** and **Twilio SMS**, built with Laravel 11.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+# ⭐ Features
+- Client Registration
+- OTP login (Email + optional SMS)
+- OTP expires in 5 minutes
+- Secure session login
+- Full Bootstrap UI
+- Custom `clients` table (separate from default Laravel users)
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+---
 
-## Learning Laravel
+# 🧱 1. Install Laravel
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+```
+composer create-project laravel/laravel otp-system
+php artisan serve
+```
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+---
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+# 🛠 2. Configure Database + SMTP + Twilio
 
-## Laravel Sponsors
+## Database (.env)
+```
+DB_DATABASE=your_db
+DB_USERNAME=root
+DB_PASSWORD=root
+```
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## SMTP Email Setup
+```
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.mailtrap.io
+MAIL_PORT=587
+MAIL_USERNAME=your_smtp_user
+MAIL_PASSWORD=your_smtp_password
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS=no-reply@example.com
+MAIL_FROM_NAME="My App"
+```
 
-### Premium Partners
+## Twilio SMS Setup
+```
+TWILIO_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_FROM=+1XXXXXXXX
+```
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+---
 
-## Contributing
+# 🧱 3. Install Laravel UI Auth Scaffold
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+```
+composer require laravel/ui
+php artisan ui bootstrap --auth
+npm install
+npm run build
+```
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+# 🧱 4. Create Clients Table Migration
 
-## Security Vulnerabilities
+```
+php artisan make:migration create_clients_table
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### Migration Fields
+```php
+$table->id();
+$table->string('name')->nullable();
+$table->string('email')->unique();
+$table->string('phone')->nullable();
+$table->string('password');
+$table->string('login_otp')->nullable();
+$table->timestamp('login_otp_expires_at')->nullable();
+$table->timestamps();
+```
 
-## License
+Run migration:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```
+php artisan migrate
+```
+
+---
+
+# 👤 5. Client Model
+
+```
+php artisan make:model Client
+```
+
+```php
+class Client extends Authenticatable
+{
+    protected $fillable = ['name','email','phone','password'];
+
+    protected $hidden = ['password','login_otp'];
+
+    protected $casts = [
+        'login_otp_expires_at' => 'datetime',
+    ];
+}
+```
+
+---
+
+# 🚏 6. Routes for OTP Authentication
+
+```php
+// Registration
+Route::get('client/register', [ClientAuthController::class, 'registerForm']);
+Route::post('client/register', [ClientAuthController::class, 'register']);
+
+// Login
+Route::get('client/login', [ClientAuthController::class, 'loginForm']);
+Route::post('client/login/send-otp', [ClientAuthController::class, 'sendOtp']);
+
+// OTP Verification
+Route::get('client/login/verify-otp', [ClientAuthController::class, 'otpForm']);
+Route::post('client/login/verify-otp', [ClientAuthController::class, 'verifyOtp']);
+
+// Logout
+Route::post('client/logout', [ClientAuthController::class, 'logout']);
+```
+
+---
+
+# 🧠 7. OTP Authentication Logic (Controller Overview)
+
+### ✔ Registration
+- Validate fields
+- Hash password
+- Save client
+- Send welcome email
+
+### ✔ Send OTP
+- Generate 6-digit OTP
+- Save to DB with 5-minute expiry
+- Email OTP
+- Store client ID in session
+
+### ✔ Verify OTP
+- Check correct OTP
+- Check expiry
+- Login client
+- Clear OTP fields
+
+---
+
+# 🎨 8. UI Views
+
+The system includes:
+
+### Registration Page
+Fields:
+- Full Name  
+- Email  
+- Phone  
+- Password  
+
+### Login Page
+- Enter email → receive OTP  
+
+### OTP Verification Page
+- Enter 6-digit OTP  
+
+### Layout Page
+- Clean Bootstrap styling
+- Center auth box  
+- Styled buttons  
+
+---
+
+# ▶ Run Application
+
+```
+php artisan serve
+```
+
+Visit:
+
+```
+http://127.0.0.1:8000/client/register
+```
+
+<img width="628" height="462" alt="image" src="https://github.com/user-attachments/assets/72185ed7-bab7-455c-a9c1-38e642d24176" />
+
+<img width="628" height="346" alt="image" src="https://github.com/user-attachments/assets/f2299fc5-5aa4-4c01-86df-3b849a2e4e25" />
+<img width="979" height="767" alt="image" src="https://github.com/user-attachments/assets/3209e789-2792-4aee-83a9-4479a3acd762" />
