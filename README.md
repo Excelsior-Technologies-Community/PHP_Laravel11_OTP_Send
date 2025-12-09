@@ -1,94 +1,107 @@
 
- Laravel 11 – OTP Login System (Email + Twilio SMS)
- 
-![Laravel](https://img.shields.io/badge/Laravel-11-orange)
-![PHP](https://img.shields.io/badge/PHP-8.2-blue)
-![Twilio](https://img.shields.io/badge/Twilio-OTP-red)
-![Email](https://img.shields.io/badge/SMTP-Mail-green)
+# Laravel – OTP Login & Email Sending Using Twilio + SMTP
 
-A complete OTP-based authentication system using **Email (SMTP)** and **Twilio SMS**, built with Laravel 11.
+This README explains how to send OTP via email and authenticate a user using OTP-based login.  
+It includes Twilio setup, SMTP email setup, migrations, controller logic, and blade files.  
+(Exactly based on the steps from your provided file.)
 
 ---
 
- Features
-- Client Registration
-- OTP login (Email + optional SMS)
-- OTP expires in 5 minutes
-- Secure session login
-- Full Bootstrap UI
-- Custom `clients` table (separate from default Laravel users)
+## Step 1: Install Laravel
 
----
-
- 1. Install Laravel
+If you have not created a Laravel project yet, run:
 
 ```
-composer create-project laravel/laravel otp-system
+composer create-project laravel/laravel your-project-name
 php artisan serve
 ```
 
 ---
 
- 2. Configure Database + SMTP + Twilio
+## Step 2: Setup Database Configuration
 
- Database (.env)
+Open `.env` and update database settings:
+
 ```
-DB_DATABASE=your_db
-DB_USERNAME=root
-DB_PASSWORD=root
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=your_database
+DB_USERNAME=your_username
+DB_PASSWORD=your_password
 ```
 
- SMTP Email Setup
+### Add EMAIL + TWILIO credentials in `.env`
+
 ```
+# SMTP Mail
 MAIL_MAILER=smtp
 MAIL_HOST=smtp.mailtrap.io
 MAIL_PORT=587
 MAIL_USERNAME=your_smtp_user
-MAIL_PASSWORD=your_smtp_password
+MAIL_PASSWORD=your_smtp_pass
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS=no-reply@example.com
 MAIL_FROM_NAME="My App"
-```
 
- Twilio SMS Setup
-```
-TWILIO_SID=your_twilio_sid
+# Twilio SMS
+TWILIO_SID=your_twilio_account_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_FROM=+1XXXXXXXX
+TWILIO_FROM=+1XXXXXXXXXX
 ```
 
 ---
 
- 3. Install Laravel UI Auth Scaffold
+## Step 3: Install Auth Scaffold
+
+Install Laravel UI:
 
 ```
 composer require laravel/ui
+```
+
+Generate UI with Bootstrap:
+
+```
 php artisan ui bootstrap --auth
+```
+
+Install npm dependencies:
+
+```
 npm install
 npm run build
 ```
 
 ---
 
- 4. Create Clients Table Migration
+## Step 4: Create Migration
+
+Run:
 
 ```
 php artisan make:migration create_clients_table
 ```
 
- Migration Fields
+Migration file:
+
 ```php
-$table->id();
-$table->string('name')->nullable();
-$table->string('email')->unique();
-$table->string('phone')->nullable();
-$table->string('password');
-$table->string('login_otp')->nullable();
-$table->timestamp('login_otp_expires_at')->nullable();
-$table->timestamps();
+Schema::create('clients', function (Blueprint $table) {
+    $table->id();
+    $table->string('name')->nullable();
+    $table->string('email')->unique();
+    $table->string('phone')->nullable();
+    $table->string('password');
+
+    // OTP
+    $table->string('login_otp')->nullable();
+    $table->timestamp('login_otp_expires_at')->nullable();
+
+    $table->timestamps();
+});
 ```
 
-Run migration:
+Apply migration:
 
 ```
 php artisan migrate
@@ -96,11 +109,15 @@ php artisan migrate
 
 ---
 
- 5. Client Model
+## Step 5: Create Model (Client)
+
+Run:
 
 ```
 php artisan make:model Client
 ```
+
+`app/Models/Client.php`:
 
 ```php
 class Client extends Authenticatable
@@ -117,80 +134,178 @@ class Client extends Authenticatable
 
 ---
 
- 6. Routes for OTP Authentication
+## Step 6: Create Routes
+
+Add routes in `routes/web.php`:
 
 ```php
+use App\Http\Controllers\ClientAuthController;
+
 // Registration
-Route::get('client/register', [ClientAuthController::class, 'registerForm']);
-Route::post('client/register', [ClientAuthController::class, 'register']);
+Route::get('client/register', [ClientAuthController::class, 'registerForm'])->name('client.register.form');
+Route::post('client/register', [ClientAuthController::class, 'register'])->name('client.register');
 
 // Login
-Route::get('client/login', [ClientAuthController::class, 'loginForm']);
-Route::post('client/login/send-otp', [ClientAuthController::class, 'sendOtp']);
+Route::get('client/login', [ClientAuthController::class, 'loginForm'])->name('client.login.form');
+Route::post('client/login/send-otp', [ClientAuthController::class, 'sendOtp'])->name('client.login.sendOtp');
 
-// OTP Verification
-Route::get('client/login/verify-otp', [ClientAuthController::class, 'otpForm']);
-Route::post('client/login/verify-otp', [ClientAuthController::class, 'verifyOtp']);
+// OTP Verify
+Route::get('client/login/verify-otp', [ClientAuthController::class, 'otpForm'])->name('client.otp.form');
+Route::post('client/login/verify-otp', [ClientAuthController::class, 'verifyOtp'])->name('client.otp.verify');
 
 // Logout
-Route::post('client/logout', [ClientAuthController::class, 'logout']);
+Route::post('client/logout', [ClientAuthController::class, 'logout'])->name('client.logout');
+
+// Home
+Route::get('/', function () { return view('welcome'); });
 ```
 
 ---
 
- 7. OTP Authentication Logic (Controller Overview)
+## Step 7: Create Controller (ClientAuthController)
 
- Registration
-- Validate fields
-- Hash password
-- Save client
-- Send welcome email
+Location: `app/Http/Controllers/ClientAuthController.php`
 
- Send OTP
-- Generate 6-digit OTP
-- Save to DB with 5-minute expiry
-- Email OTP
-- Store client ID in session
+### Registration Logic
 
- Verify OTP
-- Check correct OTP
-- Check expiry
-- Login client
-- Clear OTP fields
+```php
+public function register(Request $request)
+{
+    $request->validate([
+        'name' => 'required',
+        'email'=> 'required|email|unique:clients',
+        'password'=> 'required|min:6',
+        'phone'=> 'nullable'
+    ]);
+
+    $client = Client::create([
+        'name'=>$request->name,
+        'email'=>$request->email,
+        'phone'=>$request->phone,
+        'password'=>Hash::make($request->password),
+    ]);
+
+    Mail::raw("Hello {$client->name}, registration successful!", function($msg) use ($client) {
+        $msg->to($client->email)->subject("Welcome to Our App");
+    });
+
+    return redirect()->route('client.login.form')
+        ->with('success','Registration successful! Please login.');
+}
+```
 
 ---
 
- 8. UI Views
+### Send OTP Logic
 
-The system includes:
+```php
+public function sendOtp(Request $request)
+{
+    $request->validate(['email'=>'required|email']);
 
- Registration Page
-Fields:
-- Full Name  
+    $client = Client::where('email',$request->email)->first();
+
+    if (!$client) {
+        return back()->withErrors(['email'=>'Client not found']);
+    }
+
+    $otp = rand(100000, 999999);
+
+    $client->login_otp = $otp;
+    $client->login_otp_expires_at = now()->addMinutes(5);
+    $client->save();
+
+    Mail::raw("Your OTP is: {$otp}", function($mail) use ($client) {
+        $mail->to($client->email)->subject("Your Login OTP");
+    });
+
+    session(['client_login_id'=>$client->id]);
+
+    return redirect()->route('client.otp.form')
+        ->with('success','OTP sent to your email!');
+}
+```
+
+---
+
+### Verify OTP Logic
+
+```php
+public function verifyOtp(Request $request)
+{
+    $request->validate(['otp'=>'required|digits:6']);
+
+    $client = Client::find(session('client_login_id'));
+
+    if (!$client) {
+        return redirect()->route('client.login.form')
+            ->withErrors(['otp'=>'Session expired']);
+    }
+
+    if ($client->login_otp != $request->otp) {
+        return back()->withErrors(['otp'=>'Invalid OTP']);
+    }
+
+    if (now()->gt($client->login_otp_expires_at)) {
+        return back()->withErrors(['otp'=>'OTP expired']);
+    }
+
+    $client->login_otp = null;
+    $client->login_otp_expires_at = null;
+    $client->save();
+
+    Auth::login($client);
+
+    return redirect('/')->with('success','Login successful!');
+}
+```
+
+---
+
+### Logout
+
+```php
+public function logout()
+{
+    Auth::logout();
+    return redirect()->route('client.login.form');
+}
+```
+
+---
+
+## Step 8: Blade Templates
+
+### Registration View (`client/registration.blade.php`)
+- Full name  
 - Email  
 - Phone  
 - Password  
+- Submit button  
 
- Login Page
-- Enter email → receive OTP  
+### Login View (`client/login.blade.php`)
+- Email input  
+- "Send OTP" button  
 
- OTP Verification Page
-- Enter 6-digit OTP  
+### OTP Verification (`client/verify-otp.blade.php`)
+- OTP input  
+- Verify button  
 
- Layout Page
-- Clean Bootstrap styling
-- Center auth box  
-- Styled buttons  
+### Layout File (`client/layout.blade.php`)
+- Bootstrap UI layout  
+- Authentication box styling  
 
 ---
 
- Run Application
+## Run Laravel App
+
+Start server:
 
 ```
 php artisan serve
 ```
 
-Visit:
+Open:
 
 ```
 http://127.0.0.1:8000/client/register
