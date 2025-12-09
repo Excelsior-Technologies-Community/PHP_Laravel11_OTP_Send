@@ -1,5 +1,5 @@
 
-# Laravel – OTP Login & Email Sending Using Twilio + SMTP
+# Laravel 11 – OTP Login & Email Sending Using Twilio + SMTP
 
 This README explains how to send OTP via email and authenticate a user using OTP-based login.  
 It includes Twilio setup, SMTP email setup, migrations, controller logic, and blade files.  
