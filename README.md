@@ -1,5 +1,6 @@
 
-# 🔐 Laravel 11 – OTP Login System (Email + Twilio SMS)
+ Laravel 11 – OTP Login System (Email + Twilio SMS)
+ 
 ![Laravel](https://img.shields.io/badge/Laravel-11-orange)
 ![PHP](https://img.shields.io/badge/PHP-8.2-blue)
 ![Twilio](https://img.shields.io/badge/Twilio-OTP-red)
@@ -9,7 +10,7 @@ A complete OTP-based authentication system using **Email (SMTP)** and **Twilio S
 
 ---
 
-# ⭐ Features
+ Features
 - Client Registration
 - OTP login (Email + optional SMS)
 - OTP expires in 5 minutes
@@ -19,7 +20,7 @@ A complete OTP-based authentication system using **Email (SMTP)** and **Twilio S
 
 ---
 
-# 🧱 1. Install Laravel
+ 1. Install Laravel
 
 ```
 composer create-project laravel/laravel otp-system
@@ -28,16 +29,16 @@ php artisan serve
 
 ---
 
-# 🛠 2. Configure Database + SMTP + Twilio
+ 2. Configure Database + SMTP + Twilio
 
-## Database (.env)
+ Database (.env)
 ```
 DB_DATABASE=your_db
 DB_USERNAME=root
 DB_PASSWORD=root
 ```
 
-## SMTP Email Setup
+ SMTP Email Setup
 ```
 MAIL_MAILER=smtp
 MAIL_HOST=smtp.mailtrap.io
@@ -49,7 +50,7 @@ MAIL_FROM_ADDRESS=no-reply@example.com
 MAIL_FROM_NAME="My App"
 ```
 
-## Twilio SMS Setup
+ Twilio SMS Setup
 ```
 TWILIO_SID=your_twilio_sid
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
@@ -58,7 +59,7 @@ TWILIO_FROM=+1XXXXXXXX
 
 ---
 
-# 🧱 3. Install Laravel UI Auth Scaffold
+ 3. Install Laravel UI Auth Scaffold
 
 ```
 composer require laravel/ui
@@ -69,13 +70,13 @@ npm run build
 
 ---
 
-# 🧱 4. Create Clients Table Migration
+ 4. Create Clients Table Migration
 
 ```
 php artisan make:migration create_clients_table
 ```
 
-### Migration Fields
+ Migration Fields
 ```php
 $table->id();
 $table->string('name')->nullable();
@@ -95,7 +96,7 @@ php artisan migrate
 
 ---
 
-# 👤 5. Client Model
+ 5. Client Model
 
 ```
 php artisan make:model Client
@@ -116,7 +117,7 @@ class Client extends Authenticatable
 
 ---
 
-# 🚏 6. Routes for OTP Authentication
+ 6. Routes for OTP Authentication
 
 ```php
 // Registration
@@ -137,21 +138,21 @@ Route::post('client/logout', [ClientAuthController::class, 'logout']);
 
 ---
 
-# 🧠 7. OTP Authentication Logic (Controller Overview)
+ 7. OTP Authentication Logic (Controller Overview)
 
-### ✔ Registration
+ Registration
 - Validate fields
 - Hash password
 - Save client
 - Send welcome email
 
-### ✔ Send OTP
+ Send OTP
 - Generate 6-digit OTP
 - Save to DB with 5-minute expiry
 - Email OTP
 - Store client ID in session
 
-### ✔ Verify OTP
+ Verify OTP
 - Check correct OTP
 - Check expiry
 - Login client
@@ -159,31 +160,31 @@ Route::post('client/logout', [ClientAuthController::class, 'logout']);
 
 ---
 
-# 🎨 8. UI Views
+ 8. UI Views
 
 The system includes:
 
-### Registration Page
+ Registration Page
 Fields:
 - Full Name  
 - Email  
 - Phone  
 - Password  
 
-### Login Page
+ Login Page
 - Enter email → receive OTP  
 
-### OTP Verification Page
+ OTP Verification Page
 - Enter 6-digit OTP  
 
-### Layout Page
+ Layout Page
 - Clean Bootstrap styling
 - Center auth box  
 - Styled buttons  
 
 ---
 
-# ▶ Run Application
+ Run Application
 
 ```
 php artisan serve
