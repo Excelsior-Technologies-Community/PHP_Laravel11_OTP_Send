@@ -5,21 +5,20 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class OtpVerification extends Model
+class PasswordReset extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'channel',
-        'to',
+        'email',
+        'token',
         'otp',
         'expires_at',
-        'used',
-        'attempts',
-        'max_attempts',
     ];
 
     protected $casts = [
         'expires_at' => 'datetime',
     ];
+
+    protected $table = 'password_resets';
 }

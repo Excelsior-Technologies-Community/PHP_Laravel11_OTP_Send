@@ -3,78 +3,70 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
+use App\Models\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 class ClientAuthController extends Controller
 {
     // ------------------ REGISTRATION FORM ------------------
-    // Display client registration form
     public function registerForm() {
         return view('client.registration');
     }
 
     // ------------------ REGISTER NEW CLIENT ------------------
-    // Handle client registration with email verification
     public function register(Request $request) {
-        // Validate registration form inputs
         $request->validate([
-            'name' => 'required',              // Client full name required
-            'email'=> 'required|email|unique:clients',  // Unique email validation
-            'password'=> 'required|min:6',     // Password minimum 6 characters
-            'phone'=> 'nullable'               // Phone optional
+            'name' => 'required',
+            'email'=> 'required|email|unique:clients',
+            'password'=> 'required|min:6|confirmed',
+            'phone'=> 'nullable',
         ]);
 
-        // Create new client record with hashed password
         $client = Client::create([
             'name' => $request->name,
             'email'=> $request->email,
             'phone'=> $request->phone,
-            'password'=> Hash::make($request->password),  // Password hashed for security
+            'password'=> Hash::make($request->password),
         ]);
 
-        // -------- SEND WELCOME EMAIL ----------
         Mail::raw("Hello {$client->name}, your registration is successful!", function($msg) use ($client) {
-            $msg->to($client->email)     // Send to client email
+            $msg->to($client->email)
                 ->subject("Welcome to Our App");
         });
 
-        // Redirect to login with success message
-        return redirect()->route('client.login.form')
-                ->with('success','Registration successful! Please login.');
+        Auth::guard('client')->login($client);
+
+        return redirect()->route('client.dashboard')
+                ->with('success','Registration successful! Welcome.');
     }
 
     // ------------------ LOGIN FORM ------------------
-    // Display client login form
     public function loginForm() {
         return view('client.login');
     }
 
     // ------------------ SEND OTP (EMAIL VERIFICATION) ------------------
-    // Send 6-digit OTP to client's email for login verification
     public function sendOtp(Request $request) {
-        // Validate email input
         $request->validate(['email' => 'required|email']);
 
-        // Find client by email
         $client = Client::where('email', $request->email)->first();
 
-        // Return error if client not found
         if (!$client) {
             return back()->withErrors(['email' => 'Client not found']);
         }
 
-        // Generate random 6-digit OTP
         $otp = rand(100000, 999999);
 
-        // Save OTP and expiration (5 minutes) to database
         $client->login_otp = $otp;
         $client->login_otp_expires_at = now()->addMinutes(5);
+        $client->login_otp_attempts = 0;
+        $client->login_otp_locked_until = null;
         $client->save();
 
-        // -------- Send OTP via Email --------
         $subject = "Your Login OTP";
         $message = "Your OTP is: {$otp} \nThis OTP will expire in 5 minutes.";
 
@@ -83,60 +75,224 @@ class ClientAuthController extends Controller
                 ->subject($subject);
         });
 
-        // Store client ID in session for OTP verification
         session(['client_login_id' => $client->id]);
 
         return redirect()->route('client.otp.form')
                 ->with('success','OTP has been sent to your email!');
     }
 
-    // ------------------ OTP VERIFICATION FORM ------------------
-    // Display OTP input form
-    public function otpForm() {
-        return view('client.verify-otp');
-    }
-
-    // ------------------ VERIFY OTP & LOGIN ------------------
-    // Validate OTP and login client if correct
-    public function verifyOtp(Request $request) {
-        // Validate 6-digit OTP input
-        $request->validate(['otp' => 'required|digits:6']);
-
-        // Get client from session
+    // ------------------ RESEND OTP ------------------
+    public function resendOtp(Request $request) {
         $client = Client::find(session('client_login_id'));
 
-        // Session expired check
         if (!$client) {
             return redirect()->route('client.login.form')
                            ->withErrors(['otp' => 'Session expired']);
         }
 
-        // Invalid OTP check
-        if ($client->login_otp != $request->otp) {
-            return back()->withErrors(['otp' => 'Invalid OTP']);
+        if ($client->login_otp && now()->lt($client->login_otp_expires_at)) {
+            return back()->withErrors(['otp' => 'OTP is still valid. Please wait before resending.']);
         }
 
-        // OTP expired check
+        $otp = rand(100000, 999999);
+
+        $client->login_otp = $otp;
+        $client->login_otp_expires_at = now()->addMinutes(5);
+        $client->login_otp_attempts = 0;
+        $client->login_otp_locked_until = null;
+        $client->save();
+
+        $subject = "Your Login OTP (Resent)";
+        $message = "Your new OTP is: {$otp} \nThis OTP will expire in 5 minutes.";
+
+        Mail::raw($message, function($mail) use ($client, $subject) {
+            $mail->to($client->email)
+                ->subject($subject);
+        });
+
+        return back()->with('success','New OTP has been sent to your email!');
+    }
+
+    // ------------------ OTP VERIFICATION FORM ------------------
+    public function otpForm() {
+        $client = Client::find(session('client_login_id'));
+
+        if (!$client) {
+            return redirect()->route('client.login.form')
+                           ->withErrors(['otp' => 'Session expired']);
+        }
+
+        return view('client.verify-otp', [
+            'expires_at' => $client->login_otp_expires_at,
+            'client' => $client,
+        ]);
+    }
+
+    // ------------------ VERIFY OTP & LOGIN ------------------
+    public function verifyOtp(Request $request) {
+        $request->validate(['otp' => 'required|digits:6']);
+
+        $client = Client::find(session('client_login_id'));
+
+        if (!$client) {
+            return redirect()->route('client.login.form')
+                           ->withErrors(['otp' => 'Session expired']);
+        }
+
+        if ($client->login_otp_locked_until && now()->lt($client->login_otp_locked_until)) {
+            $remaining = now()->diffInSeconds($client->login_otp_locked_until);
+            $minutes = ceil($remaining / 60);
+            return back()->withErrors(['otp' => "Account temporarily locked. Try again in {$minutes} minute(s)."]);
+        }
+
+        if ($client->login_otp != $request->otp) {
+            $client->login_otp_attempts += 1;
+
+            if ($client->login_otp_attempts >= 3) {
+                $client->login_otp_locked_until = now()->addMinutes(15);
+                $client->save();
+                return back()->withErrors(['otp' => 'Too many failed attempts. Account locked for 15 minutes.']);
+            }
+
+            $client->save();
+            return back()->withErrors(['otp' => 'Invalid OTP. Attempts: ' . $client->login_otp_attempts . '/3']);
+        }
+
         if (now()->gt($client->login_otp_expires_at)) {
             return back()->withErrors(['otp' => 'OTP expired']);
         }
 
-        // OTP VALID → Clear OTP and login client
         $client->login_otp = null;
         $client->login_otp_expires_at = null;
+        $client->login_otp_attempts = 0;
+        $client->login_otp_locked_until = null;
         $client->save();
 
-        // Authenticate client session
-        Auth::login($client);
+        Auth::guard('client')->login($client);
 
-        return redirect('/')->with('success','Login successful!');
+        return redirect()->route('client.dashboard');
     }
 
     // ------------------ LOGOUT ------------------
-    // Logout client and redirect to login
     public function logout() {
-        // End client authentication session
-        Auth::logout();
+        Auth::guard('client')->logout();
         return redirect()->route('client.login.form');
+    }
+
+    // ------------------ DASHBOARD ------------------
+    public function dashboard() {
+        if (!Auth::guard('client')->check()) {
+            return redirect()->route('client.login.form');
+        }
+        return view('client.dashboard');
+    }
+
+    // ------------------ FORGOT PASSWORD FORM ------------------
+    public function forgotPasswordForm() {
+        return view('client.forgot-password');
+    }
+
+    // ------------------ SEND RESET OTP ------------------
+    public function sendResetOtp(Request $request) {
+        $request->validate(['email' => 'required|email']);
+
+        $client = Client::where('email', $request->email)->first();
+
+        if (!$client) {
+            return back()->withErrors(['email' => 'No account found with this email.']);
+        }
+
+        $otp = rand(100000, 999999);
+        $token = Str::random(60);
+
+        PasswordReset::create([
+            'email' => $client->email,
+            'token' => $token,
+            'otp' => $otp,
+            'expires_at' => now()->addMinutes(15),
+        ]);
+
+        Mail::raw("Your password reset OTP is: {$otp}\nThis OTP will expire in 15 minutes.", function($mail) use ($client) {
+            $mail->to($client->email)
+                ->subject("Password Reset OTP");
+        });
+
+        return redirect()->route('client.reset.verify-otp', ['token' => $token])
+                ->with('success','Password reset OTP has been sent to your email.');
+    }
+
+    // ------------------ VERIFY RESET OTP FORM ------------------
+    public function verifyResetOtpForm(Request $request, $token) {
+        $reset = PasswordReset::where('token', $token)->first();
+
+        if (!$reset || now()->gt($reset->expires_at)) {
+            return redirect()->route('client.forgot-password')
+                           ->withErrors(['token' => 'Invalid or expired reset token.']);
+        }
+
+        return view('client.verify-reset-otp', [
+            'token' => $token,
+            'email' => $reset->email,
+        ]);
+    }
+
+    // ------------------ VERIFY RESET OTP ------------------
+    public function verifyResetOtp(Request $request, $token) {
+        $request->validate(['otp' => 'required|digits:6']);
+
+        $reset = PasswordReset::where('token', $token)->first();
+
+        if (!$reset || now()->gt($reset->expires_at)) {
+            return redirect()->route('client.forgot-password')
+                           ->withErrors(['token' => 'Invalid or expired reset token.']);
+        }
+
+        if ($reset->otp !== $request->otp) {
+            return back()->withErrors(['otp' => 'Invalid OTP']);
+        }
+
+        return redirect()->route('client.reset.password', ['token' => $token])
+                ->with('success','OTP verified! Please enter your new password.');
+    }
+
+    // ------------------ RESET PASSWORD FORM ------------------
+    public function resetPasswordForm(Request $request, $token) {
+        $reset = PasswordReset::where('token', $token)->first();
+
+        if (!$reset) {
+            return redirect()->route('client.forgot-password')
+                           ->withErrors(['token' => 'Invalid token.']);
+        }
+
+        return view('client.reset-password', ['token' => $token]);
+    }
+
+    // ------------------ RESET PASSWORD ------------------
+    public function resetPassword(Request $request, $token) {
+        $request->validate([
+            'password' => 'required|min:6|confirmed',
+        ]);
+
+        $reset = PasswordReset::where('token', $token)->first();
+
+        if (!$reset) {
+            return redirect()->route('client.forgot-password')
+                           ->withErrors(['token' => 'Invalid token.']);
+        }
+
+        $client = Client::where('email', $reset->email)->first();
+
+        if (!$client) {
+            return redirect()->route('client.forgot-password')
+                           ->withErrors(['email' => 'Client not found.']);
+        }
+
+        $client->password = Hash::make($request->password);
+        $client->save();
+
+        PasswordReset::where('token', $token)->delete();
+
+        return redirect()->route('client.login.form')
+                ->with('success','Password has been reset successfully. Please login.');
     }
 }

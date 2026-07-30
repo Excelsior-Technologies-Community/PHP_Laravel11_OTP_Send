@@ -80,15 +80,25 @@ class OtpController extends Controller
             ], 422);
         }
 
-        if ($record->otp != $req->otp) {
+        if ($record->attempts >= ($record->max_attempts ?? 5)) {
             return response()->json([
                 'status'  => false,
-                'message' => 'Invalid OTP'
+                'message' => 'Maximum OTP attempts exceeded'
             ], 422);
         }
 
-        // Mark OTP as used
+        if ($record->otp != $req->otp) {
+            $record->attempts += 1;
+            $record->save();
+
+            return response()->json([
+                'status'  => false,
+                'message' => 'Invalid OTP. Attempts: ' . $record->attempts . '/' . ($record->max_attempts ?? 5)
+            ], 422);
+        }
+
         $record->used = true;
+        $record->attempts = 0;
         $record->save();
 
         return response()->json([

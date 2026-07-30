@@ -10,6 +10,10 @@
         <div class="alert alert-success">{{ session('success') }}</div>
     @endif
 
+    @if($errors->any())
+        <div class="alert alert-danger">{{ $errors->first() }}</div>
+    @endif
+
     <!-- EMAIL-ONLY LOGIN FORM (triggers OTP) -->
     <form method="POST" action="{{ route('client.login.sendOtp') }}">
         @csrf  <!-- CSRF protection token -->
@@ -18,18 +22,18 @@
         <div class="mb-3">
             <label class="form-label">Email Address</label>
             <input name="email" type="email" class="form-control" placeholder="example@mail.com" required>
-            <!-- Triggers OTP send to this email -->
         </div>
 
         <!-- SEND OTP BUTTON -->
         <button class="btn btn-custom w-100 mt-2">Send OTP</button>
-        <!-- Submits email → Controller sends 6-digit OTP via email -->
 
         <!-- Registration link for new users -->
         <div class="text-center mt-3">
             Don't have an account? 
             <a href="{{ route('client.register.form') }}">Register Now</a>
-            <!-- Links back to registration form -->
+        </div>
+        <div class="text-center mt-2">
+            <a href="{{ route('client.forgot-password.form') }}">Forgot Password?</a>
         </div>
     </form>
 </div>

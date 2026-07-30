@@ -6,9 +6,11 @@ $vendorDir = dirname(__DIR__);
 $baseDir = dirname($vendorDir);
 
 return array(
+    'App\\Http\\Controllers\\ClientAuthController' => $baseDir . '/app/Http/Controllers/ClientAuthController.php',
     'App\\Http\\Controllers\\Controller' => $baseDir . '/app/Http/Controllers/Controller.php',
     'App\\Http\\Controllers\\OtpController' => $baseDir . '/app/Http/Controllers/OtpController.php',
     'App\\Mail\\OtpMail' => $baseDir . '/app/Mail/OtpMail.php',
+    'App\\Models\\Client' => $baseDir . '/app/Models/Client.php',
     'App\\Models\\OtpVerification' => $baseDir . '/app/Models/OtpVerification.php',
     'App\\Models\\User' => $baseDir . '/app/Models/User.php',
     'App\\Notifications\\OtpSmsNotification' => $baseDir . '/app/Notifications/OtpSmsNotification.php',

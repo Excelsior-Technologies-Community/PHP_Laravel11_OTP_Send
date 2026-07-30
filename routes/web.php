@@ -1,35 +1,51 @@
 <?php
 
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\ClientAuthController;
 
 // ------------------ CLIENT REGISTRATION ROUTES ------------------
-// Display client registration form
 Route::get('client/register', [ClientAuthController::class, 'registerForm'])->name('client.register.form');
-
-// Handle client registration form submission
 Route::post('client/register', [ClientAuthController::class, 'register'])->name('client.register');
 
 // ------------------ CLIENT LOGIN ROUTES ------------------
-// Display client login form (email input only)
 Route::get('client/login', [ClientAuthController::class, 'loginForm'])->name('client.login.form');
-
-// Send OTP to client's email after email submission
 Route::post('client/login/send-otp', [ClientAuthController::class, 'sendOtp'])->name('client.login.sendOtp');
 
-// ------------------ CLIENT OTP VERIFICATION ROUTES ------------------
-// Display OTP verification form
-Route::get('client/login/verify-otp', [ClientAuthController::class, 'otpForm'])->name('client.otp.form');
+// ------------------ CLIENT RESEND OTP ROUTE ------------------
+Route::post('client/login/resend-otp', [ClientAuthController::class, 'resendOtp'])->name('client.login.resendOtp');
 
-// Verify OTP and complete login process
+// ------------------ CLIENT OTP VERIFICATION ROUTES ------------------
+Route::get('client/login/verify-otp', [ClientAuthController::class, 'otpForm'])->name('client.otp.form');
 Route::post('client/login/verify-otp', [ClientAuthController::class, 'verifyOtp'])->name('client.otp.verify');
 
 // ------------------ CLIENT LOGOUT ROUTE ------------------
-// Handle client logout (POST for security)
 Route::post('client/logout', [ClientAuthController::class, 'logout'])->name('client.logout');
 
+// ------------------ CLIENT DASHBOARD ROUTE ------------------
+Route::middleware('auth:client')->get('/dashboard', [ClientAuthController::class, 'dashboard'])->name('client.dashboard');
+
+// ------------------ PASSWORD RESET ROUTES ------------------
+Route::get('client/forgot-password', [ClientAuthController::class, 'forgotPasswordForm'])->name('client.forgot-password.form');
+Route::post('client/forgot-password', [ClientAuthController::class, 'sendResetOtp'])->name('client.forgot-password.send');
+Route::get('client/reset/verify-otp/{token}', [ClientAuthController::class, 'verifyResetOtpForm'])->name('client.reset.verify-otp');
+Route::post('client/reset/verify-otp/{token}', [ClientAuthController::class, 'verifyResetOtp'])->name('client.reset.verify-otp.submit');
+Route::get('client/reset/password/{token}', [ClientAuthController::class, 'resetPasswordForm'])->name('client.reset.password.form');
+Route::post('client/reset/password/{token}', [ClientAuthController::class, 'resetPassword'])->name('client.reset.password');
+
 // ------------------ HOME ROUTE ------------------
-// Default homepage (after successful login)
 Route::get('/', function () {
+    if (Auth::guard('client')->check()) {
+        return redirect()->route('client.dashboard');
+    }
     return view('welcome');
 });
+
+// ------------------ AUTH ALIASES ------------------
+// Redirect standard Laravel guest redirect to custom OTP login
+Route::get('login', function() {
+    return redirect()->route('client.login.form');
+})->name('login');
+Route::get('register', function() {
+    return redirect()->route('client.register.form');
+})->name('register');
