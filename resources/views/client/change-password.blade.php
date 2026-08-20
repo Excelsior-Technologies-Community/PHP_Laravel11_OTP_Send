@@ -5,36 +5,55 @@
 <div class="auth-box">
 
     <div class="auth-title">
-        Reset Password
+        Change Password
     </div>
 
 
     @if(session('success'))
-
     <div class="alert alert-success">
         {{ session('success') }}
     </div>
-
     @endif
 
 
     @if($errors->any())
-
     <div class="alert alert-danger">
-        {{ $errors->first() }}
-    </div>
 
+        <ul class="mb-0">
+
+            @foreach($errors->all() as $error)
+
+            <li>{{ $error }}</li>
+
+            @endforeach
+
+        </ul>
+
+    </div>
     @endif
 
 
     <form
         method="POST"
-        action="{{ route(
-            'client.reset.password',
-            ['token' => $token]
-        ) }}">
+        action="{{ route('client.password.change') }}">
 
         @csrf
+
+
+        <div class="mb-3">
+
+            <label class="form-label">
+                Current Password
+            </label>
+
+            <input
+                name="current_password"
+                type="password"
+                class="form-control"
+                placeholder="Enter current password"
+                required>
+
+        </div>
 
 
         <div class="mb-3">
@@ -47,8 +66,8 @@
                 name="password"
                 type="password"
                 class="form-control"
-                minlength="6"
                 placeholder="Enter new password"
+                minlength="8"
                 required>
 
         </div>
@@ -57,7 +76,7 @@
         <div class="mb-3">
 
             <label class="form-label">
-                Confirm Password
+                Confirm New Password
             </label>
 
             <input
@@ -65,24 +84,23 @@
                 type="password"
                 class="form-control"
                 placeholder="Confirm new password"
+                minlength="8"
                 required>
 
         </div>
 
 
         <button
+            type="submit"
             class="btn btn-custom w-100">
-            Reset Password
+            Change Password
         </button>
 
 
         <div class="text-center mt-3">
 
-            <a
-                href="{{ route(
-                    'client.login.form'
-                ) }}">
-                Back to Login
+            <a href="{{ route('client.dashboard') }}">
+                Back to Dashboard
             </a>
 
         </div>

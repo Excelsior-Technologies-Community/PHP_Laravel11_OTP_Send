@@ -3,45 +3,37 @@
 namespace App\Http\Controllers;
 
 use App\Models\Client;
-use App\Models\OtpHistory;
-use App\Models\OtpRequestLimit;
+use App\Models\OtpLoginHistory;
 use App\Models\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Notification;
+use App\Notifications\OtpSmsNotification;
 
 class ClientAuthController extends Controller
 {
     /*
     |--------------------------------------------------------------------------
-    | OTP RATE LIMIT SETTINGS
+    | REGISTRATION
     |--------------------------------------------------------------------------
     */
-
-    private const MAX_OTP_REQUESTS = 3;
-
-    private const RATE_LIMIT_MINUTES = 10;
-
-
-    // ------------------ REGISTRATION FORM ------------------
 
     public function registerForm()
     {
         return view('client.registration');
     }
 
-
-    // ------------------ REGISTER NEW CLIENT ------------------
-
     public function register(Request $request)
     {
         $request->validate([
-            'name' => 'required',
-            'email' => 'required|email|unique:clients',
+            'name' => 'required|string|max:100',
+            'email' => 'required|email|unique:clients,email',
             'password' => 'required|min:6|confirmed',
-            'phone' => 'nullable',
+            'phone' => 'nullable|string|max:20',
         ]);
 
         $client = Client::create([
@@ -55,7 +47,7 @@ class ClientAuthController extends Controller
             "Hello {$client->name}, your registration is successful!",
             function ($msg) use ($client) {
                 $msg->to($client->email)
-                    ->subject("Welcome to Our App");
+                    ->subject('Welcome to Our App');
             }
         );
 
@@ -67,7 +59,11 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ LOGIN FORM ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | LOGIN FORM
+    |--------------------------------------------------------------------------
+    */
 
     public function loginForm()
     {
@@ -75,217 +71,65 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ SEND OTP ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | SEND LOGIN OTP
+    |--------------------------------------------------------------------------
+    */
 
     public function sendOtp(Request $request)
     {
         $request->validate([
-            'email' => 'required|email',
+            'login' => 'required|string',
+            'channel' => 'required|in:email,sms',
         ]);
 
-        $client = Client::where('email', $request->email)->first();
+        $channel = $request->channel;
+        $login = trim($request->login);
 
-        if (!$client) {
+        /*
+        |--------------------------------------------------------------------------
+        | RATE LIMIT
+        |--------------------------------------------------------------------------
+        */
 
-            /*
-            |--------------------------------------------------------------------------
-            | Log failed OTP request for unknown email
-            |--------------------------------------------------------------------------
-            */
+        $rateLimitKey = 'send-login-otp:' .
+            Str::lower($login) . ':' .
+            $request->ip();
 
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $request->email,
-                'action' => 'send',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => 'Client not found.',
-            ]);
+        if (RateLimiter::tooManyAttempts($rateLimitKey, 3)) {
+
+            $seconds = RateLimiter::availableIn($rateLimitKey);
+
+            $minutes = ceil($seconds / 60);
 
             return back()->withErrors([
-                'email' => 'Client not found.',
-            ]);
+                'login' => "Too many OTP requests. Please try again in {$minutes} minute(s).",
+            ])->withInput();
         }
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | CHECK OTP RATE LIMIT
-        |--------------------------------------------------------------------------
-        */
-
-        $rateLimit = OtpRequestLimit::where('channel', 'email')
-            ->where('recipient', $client->email)
-            ->first();
+        RateLimiter::hit($rateLimitKey, 600);
 
 
         /*
         |--------------------------------------------------------------------------
-        | FIRST OTP REQUEST
+        | FIND CLIENT
         |--------------------------------------------------------------------------
         */
 
-        if (!$rateLimit) {
+        if ($channel === 'email') {
 
-            $rateLimit = OtpRequestLimit::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'ip_address' => $request->ip(),
-                'request_count' => 1,
-                'window_started_at' => now(),
-            ]);
+            $client = Client::where('email', $login)->first();
         } else {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Calculate rate-limit window
-            |--------------------------------------------------------------------------
-            */
-
-            $windowEndsAt = $rateLimit->window_started_at
-                ->copy()
-                ->addMinutes(self::RATE_LIMIT_MINUTES);
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Reset expired rate-limit window
-            |--------------------------------------------------------------------------
-            */
-
-            if (now()->greaterThanOrEqualTo($windowEndsAt)) {
-
-                $rateLimit->update([
-                    'request_count' => 1,
-                    'ip_address' => $request->ip(),
-                    'window_started_at' => now(),
-                ]);
-            } else {
-
-                /*
-                |--------------------------------------------------------------------------
-                | BLOCK AFTER 3 REQUESTS
-                |--------------------------------------------------------------------------
-                */
-
-                if ($rateLimit->request_count >= self::MAX_OTP_REQUESTS) {
-
-                    $remainingSeconds = now()->diffInSeconds(
-                        $windowEndsAt,
-                        false
-                    );
-
-                    $remainingMinutes = max(
-                        1,
-                        (int) ceil($remainingSeconds / 60)
-                    );
-
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Save blocked request in OTP history
-                    |--------------------------------------------------------------------------
-                    */
-
-                    OtpHistory::create([
-                        'channel' => 'email',
-                        'recipient' => $client->email,
-                        'action' => 'send',
-                        'status' => 'blocked',
-                        'ip_address' => $request->ip(),
-                        'message' => "OTP request limit exceeded. Try again in {$remainingMinutes} minute(s).",
-                    ]);
-
-
-                    return back()
-                        ->withErrors([
-                            'email' => "Too many OTP requests. Please try again in {$remainingMinutes} minute(s).",
-                        ])
-                        ->withInput();
-                }
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Increase request count
-                |--------------------------------------------------------------------------
-                */
-
-                $rateLimit->increment('request_count');
-
-                $rateLimit->update([
-                    'ip_address' => $request->ip(),
-                ]);
-            }
+            $client = Client::where('phone', $login)->first();
         }
 
 
-        /*
-        |--------------------------------------------------------------------------
-        | Generate OTP
-        |--------------------------------------------------------------------------
-        */
-
-        $otp = random_int(100000, 999999);
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Store OTP
-        |--------------------------------------------------------------------------
-        */
-
-        $client->login_otp = $otp;
-
-        $client->login_otp_expires_at = now()->addMinutes(5);
-
-        $client->login_otp_attempts = 0;
-
-        $client->login_otp_locked_until = null;
-
-        $client->save();
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Send OTP Email
-        |--------------------------------------------------------------------------
-        */
-
-        $subject = "Your Login OTP";
-
-        $message = "Your OTP is: {$otp}\nThis OTP will expire in 5 minutes.";
-
-        try {
-
-            Mail::raw(
-                $message,
-                function ($mail) use ($client, $subject) {
-                    $mail->to($client->email)
-                        ->subject($subject);
-                }
-            );
-
-        } catch (\Throwable $e) {
-
-            /*
-            |--------------------------------------------------------------------------
-            | Log failed OTP email
-            |--------------------------------------------------------------------------
-            */
-
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'send',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => 'Failed to send OTP email: ' . $e->getMessage(),
-            ]);
-
+        if (!$client) {
             return back()
                 ->withErrors([
-                    'email' => 'Unable to send OTP email. Please try again.',
+                    'login' => 'No client account found with these details.',
                 ])
                 ->withInput();
         }
@@ -293,251 +137,181 @@ class ClientAuthController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Save Successful OTP Request
-        |--------------------------------------------------------------------------
-        */
-
-        OtpHistory::create([
-            'channel' => 'email',
-            'recipient' => $client->email,
-            'action' => 'send',
-            'status' => 'success',
-            'ip_address' => $request->ip(),
-            'message' => 'OTP sent successfully.',
-        ]);
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Store Client ID In Session
-        |--------------------------------------------------------------------------
-        */
-
-        session([
-            'client_login_id' => $client->id,
-        ]);
-
-
-        return redirect()
-            ->route('client.otp.form')
-            ->with(
-                'success',
-                'OTP has been sent to your email!'
-            );
-    }
-
-
-    // ------------------ RESEND OTP ------------------
-
-    public function resendOtp(Request $request)
-    {
-        $client = Client::find(
-            session('client_login_id')
-        );
-
-
-        if (!$client) {
-
-            return redirect()
-                ->route('client.login.form')
-                ->withErrors([
-                    'otp' => 'Session expired.',
-                ]);
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | CHECK OTP RATE LIMIT
-        |--------------------------------------------------------------------------
-        */
-
-        $rateLimit = OtpRequestLimit::where('channel', 'email')
-            ->where('recipient', $client->email)
-            ->first();
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | FIRST RESEND REQUEST
-        |--------------------------------------------------------------------------
-        */
-
-        if (!$rateLimit) {
-
-            $rateLimit = OtpRequestLimit::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'ip_address' => $request->ip(),
-                'request_count' => 1,
-                'window_started_at' => now(),
-            ]);
-        } else {
-
-            $windowEndsAt = $rateLimit->window_started_at
-                ->copy()
-                ->addMinutes(self::RATE_LIMIT_MINUTES);
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Reset expired window
-            |--------------------------------------------------------------------------
-            */
-
-            if (now()->greaterThanOrEqualTo($windowEndsAt)) {
-
-                $rateLimit->update([
-                    'request_count' => 1,
-                    'ip_address' => $request->ip(),
-                    'window_started_at' => now(),
-                ]);
-            } else {
-
-                /*
-                |--------------------------------------------------------------------------
-                | Block after 3 requests
-                |--------------------------------------------------------------------------
-                */
-
-                if ($rateLimit->request_count >= self::MAX_OTP_REQUESTS) {
-
-                    $remainingSeconds = now()->diffInSeconds(
-                        $windowEndsAt,
-                        false
-                    );
-
-                    $remainingMinutes = max(
-                        1,
-                        (int) ceil($remainingSeconds / 60)
-                    );
-
-
-                    OtpHistory::create([
-                        'channel' => 'email',
-                        'recipient' => $client->email,
-                        'action' => 'send',
-                        'status' => 'blocked',
-                        'ip_address' => $request->ip(),
-                        'message' => "OTP resend limit exceeded. Try again in {$remainingMinutes} minute(s).",
-                    ]);
-
-
-                    return back()
-                        ->withErrors([
-                            'otp' => "Too many OTP requests. Please try again in {$remainingMinutes} minute(s).",
-                        ]);
-                }
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Increase request count
-                |--------------------------------------------------------------------------
-                */
-
-                $rateLimit->increment('request_count');
-
-                $rateLimit->update([
-                    'ip_address' => $request->ip(),
-                ]);
-            }
-        }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Generate New OTP
+        | GENERATE OTP
         |--------------------------------------------------------------------------
         */
 
         $otp = random_int(100000, 999999);
 
-
         $client->login_otp = $otp;
-
         $client->login_otp_expires_at = now()->addMinutes(5);
-
         $client->login_otp_attempts = 0;
-
         $client->login_otp_locked_until = null;
-
         $client->save();
 
 
         /*
         |--------------------------------------------------------------------------
-        | Send New OTP
+        | STORE LOGIN SESSION
         |--------------------------------------------------------------------------
         */
 
-        $subject = "Your Login OTP (Resent)";
+        session([
+            'client_login_id' => $client->id,
+            'client_login_channel' => $channel,
+        ]);
 
-        $message = "Your new OTP is: {$otp}\nThis OTP will expire in 5 minutes.";
 
-        try {
+        /*
+        |--------------------------------------------------------------------------
+        | SEND EMAIL OTP
+        |--------------------------------------------------------------------------
+        */
 
-            Mail::raw(
-                $message,
-                function ($mail) use ($client, $subject) {
-                    $mail->to($client->email)
-                        ->subject($subject);
-                }
-            );
+        if ($channel === 'email') {
 
-        } catch (\Throwable $e) {
+            $message = "Your Login OTP is: {$otp}\n\n"
+                . "This OTP will expire in 5 minutes.\n\n"
+                . "If you did not request this OTP, please ignore this email.";
 
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'send',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => 'Failed to send OTP email: ' . $e->getMessage(),
-            ]);
+            Mail::raw($message, function ($mail) use ($client) {
+                $mail->to($client->email)
+                    ->subject('Your Login OTP');
+            });
+        }
 
-            return back()
+
+        /*
+        |--------------------------------------------------------------------------
+        | SEND SMS OTP
+        |--------------------------------------------------------------------------
+        */
+
+        if ($channel === 'sms') {
+
+            if (!$client->phone) {
+                return back()->withErrors([
+                    'login' => 'No phone number is registered for this account.',
+                ]);
+            }
+
+            Notification::route('twilio', $client->phone)
+                ->notify(new OtpSmsNotification($otp));
+        }
+
+
+        return redirect()
+            ->route('client.otp.form')
+            ->with('success', 'OTP has been sent successfully.');
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESEND OTP
+    |--------------------------------------------------------------------------
+    */
+
+    public function resendOtp(Request $request)
+    {
+        $client = Client::find(session('client_login_id'));
+
+        if (!$client) {
+            return redirect()
+                ->route('client.login.form')
                 ->withErrors([
-                    'otp' => 'Unable to send OTP email. Please try again.',
+                    'otp' => 'Session expired. Please login again.',
                 ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Save Successful Resend
+        | RESEND RATE LIMIT
         |--------------------------------------------------------------------------
         */
 
-        OtpHistory::create([
-            'channel' => 'email',
-            'recipient' => $client->email,
-            'action' => 'send',
-            'status' => 'success',
-            'ip_address' => $request->ip(),
-            'message' => 'OTP resent successfully.',
-        ]);
+        $key = 'resend-login-otp:' .
+            $client->id . ':' .
+            $request->ip();
+
+        if (RateLimiter::tooManyAttempts($key, 3)) {
+
+            $seconds = RateLimiter::availableIn($key);
+
+            $minutes = ceil($seconds / 60);
+
+            return back()->withErrors([
+                'otp' => "Too many resend requests. Please try again in {$minutes} minute(s).",
+            ]);
+        }
+
+        RateLimiter::hit($key, 600);
 
 
-        return back()
-            ->with(
-                'success',
-                'New OTP has been sent to your email!'
+        /*
+        |--------------------------------------------------------------------------
+        | EXISTING OTP CHECK
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $client->login_otp &&
+            $client->login_otp_expires_at &&
+            now()->lt($client->login_otp_expires_at)
+        ) {
+            return back()->withErrors([
+                'otp' => 'OTP is still valid. Please wait before requesting another OTP.',
+            ]);
+        }
+
+
+        $otp = random_int(100000, 999999);
+
+        $client->login_otp = $otp;
+        $client->login_otp_expires_at = now()->addMinutes(5);
+        $client->login_otp_attempts = 0;
+        $client->login_otp_locked_until = null;
+        $client->save();
+
+
+        $channel = session('client_login_channel', 'email');
+
+
+        if ($channel === 'sms') {
+
+            Notification::route('twilio', $client->phone)
+                ->notify(new OtpSmsNotification($otp));
+        } else {
+
+            Mail::raw(
+                "Your new Login OTP is: {$otp}\n\nThis OTP will expire in 5 minutes.",
+                function ($mail) use ($client) {
+                    $mail->to($client->email)
+                        ->subject('Your Login OTP - Resent');
+                }
             );
+        }
+
+
+        return back()->with(
+            'success',
+            'New OTP has been sent successfully.'
+        );
     }
 
 
-    // ------------------ OTP VERIFICATION FORM ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | OTP FORM
+    |--------------------------------------------------------------------------
+    */
 
     public function otpForm()
     {
-        $client = Client::find(
-            session('client_login_id')
-        );
-
+        $client = Client::find(session('client_login_id'));
 
         if (!$client) {
-
             return redirect()
                 ->route('client.login.form')
                 ->withErrors([
@@ -545,18 +319,19 @@ class ClientAuthController extends Controller
                 ]);
         }
 
-
-        return view(
-            'client.verify-otp',
-            [
-                'expires_at' => $client->login_otp_expires_at,
-                'client' => $client,
-            ]
-        );
+        return view('client.verify-otp', [
+            'expires_at' => $client->login_otp_expires_at,
+            'client' => $client,
+            'channel' => session('client_login_channel', 'email'),
+        ]);
     }
 
 
-    // ------------------ VERIFY OTP & LOGIN ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | VERIFY LOGIN OTP
+    |--------------------------------------------------------------------------
+    */
 
     public function verifyOtp(Request $request)
     {
@@ -564,25 +339,20 @@ class ClientAuthController extends Controller
             'otp' => 'required|digits:6',
         ]);
 
-
-        $client = Client::find(
-            session('client_login_id')
-        );
-
+        $client = Client::find(session('client_login_id'));
 
         if (!$client) {
-
             return redirect()
                 ->route('client.login.form')
                 ->withErrors([
-                    'otp' => 'Session expired.',
+                    'otp' => 'Session expired. Please login again.',
                 ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Check OTP Account Lock
+        | CHECK LOCK
         |--------------------------------------------------------------------------
         */
 
@@ -595,63 +365,41 @@ class ClientAuthController extends Controller
                 $client->login_otp_locked_until
             );
 
-            $minutes = max(
-                1,
-                ceil($remaining / 60)
+            $minutes = ceil($remaining / 60);
+
+            $this->createOtpHistory(
+                $client,
+                'failed'
             );
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | Save blocked verification history
-            |--------------------------------------------------------------------------
-            */
-
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'verify',
-                'status' => 'blocked',
-                'ip_address' => $request->ip(),
-                'message' => "Account temporarily locked. Try again in {$minutes} minute(s).",
+            return back()->withErrors([
+                'otp' => "Account temporarily locked. Try again in {$minutes} minute(s).",
             ]);
-
-
-            return back()
-                ->withErrors([
-                    'otp' => "Account temporarily locked. Try again in {$minutes} minute(s).",
-                ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Check OTP Exists
+        | CHECK OTP EXISTS
         |--------------------------------------------------------------------------
         */
 
         if (!$client->login_otp) {
 
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'verify',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => 'OTP expired or not found.',
+            $this->createOtpHistory(
+                $client,
+                'expired'
+            );
+
+            return back()->withErrors([
+                'otp' => 'No active OTP found. Please request a new OTP.',
             ]);
-
-
-            return back()
-                ->withErrors([
-                    'otp' => 'OTP expired or not found.',
-                ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Check OTP Expiration
+        | CHECK EXPIRY
         |--------------------------------------------------------------------------
         */
 
@@ -660,40 +408,27 @@ class ClientAuthController extends Controller
             now()->gt($client->login_otp_expires_at)
         ) {
 
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'verify',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => 'OTP expired.',
+            $this->createOtpHistory(
+                $client,
+                'expired'
+            );
+
+            return back()->withErrors([
+                'otp' => 'OTP has expired. Please request a new OTP.',
             ]);
-
-
-            return back()
-                ->withErrors([
-                    'otp' => 'OTP expired.',
-                ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | Check Wrong OTP
+        | CHECK OTP
         |--------------------------------------------------------------------------
         */
 
         if ((string) $client->login_otp !== (string) $request->otp) {
 
             $client->login_otp_attempts =
-                ($client->login_otp_attempts ?? 0) + 1;
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Maximum 3 Verification Attempts
-            |--------------------------------------------------------------------------
-            */
+                (int) $client->login_otp_attempts + 1;
 
             if ($client->login_otp_attempts >= 3) {
 
@@ -702,132 +437,122 @@ class ClientAuthController extends Controller
 
                 $client->save();
 
+                $this->createOtpHistory(
+                    $client,
+                    'failed'
+                );
 
-                OtpHistory::create([
-                    'channel' => 'email',
-                    'recipient' => $client->email,
-                    'action' => 'verify',
-                    'status' => 'blocked',
-                    'ip_address' => $request->ip(),
-                    'message' => 'Too many failed OTP attempts. Account locked for 15 minutes.',
+                return back()->withErrors([
+                    'otp' =>
+                    'Too many failed attempts. Account locked for 15 minutes.',
                 ]);
-
-
-                return back()
-                    ->withErrors([
-                        'otp' => 'Too many failed attempts. Account locked for 15 minutes.',
-                    ]);
             }
-
 
             $client->save();
 
+            $this->createOtpHistory(
+                $client,
+                'failed'
+            );
 
-            $attemptMessage =
+            return back()->withErrors([
+                'otp' =>
                 'Invalid OTP. Attempts: ' .
-                $client->login_otp_attempts .
-                '/3';
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Save Failed Verification
-            |--------------------------------------------------------------------------
-            */
-
-            OtpHistory::create([
-                'channel' => 'email',
-                'recipient' => $client->email,
-                'action' => 'verify',
-                'status' => 'failed',
-                'ip_address' => $request->ip(),
-                'message' => $attemptMessage,
+                    $client->login_otp_attempts .
+                    '/3',
             ]);
-
-
-            return back()
-                ->withErrors([
-                    'otp' => $attemptMessage,
-                ]);
         }
 
 
         /*
         |--------------------------------------------------------------------------
-        | OTP Successfully Verified
+        | SUCCESS
         |--------------------------------------------------------------------------
         */
+
+        $this->createOtpHistory(
+            $client,
+            'success'
+        );
+
 
         $client->login_otp = null;
-
         $client->login_otp_expires_at = null;
-
         $client->login_otp_attempts = 0;
-
         $client->login_otp_locked_until = null;
-
         $client->save();
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save Successful Verification
-        |--------------------------------------------------------------------------
-        */
-
-        OtpHistory::create([
-            'channel' => 'email',
-            'recipient' => $client->email,
-            'action' => 'verify',
-            'status' => 'success',
-            'ip_address' => $request->ip(),
-            'message' => 'OTP verified successfully.',
-        ]);
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Login Client
-        |--------------------------------------------------------------------------
-        */
 
         Auth::guard('client')->login($client);
 
         $request->session()->regenerate();
 
-        $request->session()->forget('client_login_id');
+        session()->forget([
+            'client_login_id',
+            'client_login_channel',
+        ]);
 
 
         return redirect()
             ->route('client.dashboard')
-            ->with(
-                'success',
-                'Login successful!'
-            );
+            ->with('success', 'Login successful!');
     }
 
 
-    // ------------------ LOGOUT ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | OTP HISTORY HELPER
+    |--------------------------------------------------------------------------
+    */
+
+    private function createOtpHistory(
+        Client $client,
+        string $status
+    ): void {
+
+        OtpLoginHistory::create([
+            'client_id' => $client->id,
+            'email' => $client->email,
+            'phone' => $client->phone,
+            'channel' => session(
+                'client_login_channel',
+                'email'
+            ),
+            'status' => $status,
+            'ip_address' => request()->ip(),
+            'user_agent' => request()->userAgent(),
+        ]);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOGOUT
+    |--------------------------------------------------------------------------
+    */
 
     public function logout(Request $request)
     {
         Auth::guard('client')->logout();
 
         $request->session()->invalidate();
-
         $request->session()->regenerateToken();
 
         return redirect()
-            ->route('client.login.form');
+            ->route('client.login.form')
+            ->with('success', 'You have been logged out.');
     }
 
 
-    // ------------------ DASHBOARD ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | DASHBOARD
+    |--------------------------------------------------------------------------
+    */
 
     public function dashboard()
     {
         if (!Auth::guard('client')->check()) {
-
             return redirect()
                 ->route('client.login.form');
         }
@@ -836,7 +561,253 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ FORGOT PASSWORD FORM ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | EDIT PROFILE FORM
+    |--------------------------------------------------------------------------
+    */
+
+    public function editProfile()
+    {
+        $client = Auth::guard('client')->user();
+
+        return view('client.profile-edit', [
+            'client' => $client,
+        ]);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE PROFILE
+    |--------------------------------------------------------------------------
+    */
+
+    public function updateProfile(Request $request)
+    {
+        $client = Auth::guard('client')->user();
+
+        $request->validate([
+            'name' => 'required|string|max:100',
+            'phone' => 'nullable|string|max:20',
+        ]);
+
+        $client->name = $request->name;
+        $client->phone = $request->phone;
+        $client->save();
+
+        return redirect()
+            ->route('client.profile.edit')
+            ->with('success', 'Profile updated successfully.');
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | CHANGE PASSWORD FORM
+    |--------------------------------------------------------------------------
+    */
+
+    public function changePasswordForm()
+    {
+        return view('client.change-password');
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | CHANGE PASSWORD
+    |--------------------------------------------------------------------------
+    */
+
+    public function changePassword(Request $request)
+    {
+        $request->validate([
+            'current_password' => 'required',
+            'password' => 'required|min:8|confirmed',
+        ]);
+
+        $client = Auth::guard('client')->user();
+
+        if (
+            !Hash::check(
+                $request->current_password,
+                $client->password
+            )
+        ) {
+            return back()->withErrors([
+                'current_password' =>
+                'Current password is incorrect.',
+            ]);
+        }
+
+        if (
+            Hash::check(
+                $request->password,
+                $client->password
+            )
+        ) {
+            return back()->withErrors([
+                'password' =>
+                'New password must be different from the current password.',
+            ]);
+        }
+
+        $client->password = Hash::make(
+            $request->password
+        );
+
+        $client->save();
+
+        return redirect()
+            ->route('client.dashboard')
+            ->with(
+                'success',
+                'Password changed successfully.'
+            );
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | OTP LOGIN HISTORY
+    |--------------------------------------------------------------------------
+    */
+
+    public function otpHistory(Request $request)
+    {
+        $client = Auth::guard('client')->user();
+
+        $query = OtpLoginHistory::where(
+            'client_id',
+            $client->id
+        );
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | SEARCH
+        |--------------------------------------------------------------------------
+        */
+
+        if ($request->filled('search')) {
+
+            $search = $request->search;
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where('email', 'like', "%{$search}%")
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('ip_address', 'like', "%{$search}%")
+                    ->orWhere('status', 'like', "%{$search}%")
+                    ->orWhere('channel', 'like', "%{$search}%");
+            });
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | STATUS FILTER
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $request->filled('status') &&
+            in_array(
+                $request->status,
+                ['success', 'failed', 'expired']
+            )
+        ) {
+            $query->where(
+                'status',
+                $request->status
+            );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | CHANNEL FILTER
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $request->filled('channel') &&
+            in_array(
+                $request->channel,
+                ['email', 'sms']
+            )
+        ) {
+            $query->where(
+                'channel',
+                $request->channel
+            );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | DATE FILTER
+        |--------------------------------------------------------------------------
+        */
+
+        if ($request->filled('date_from')) {
+            $query->whereDate(
+                'created_at',
+                '>=',
+                $request->date_from
+            );
+        }
+
+        if ($request->filled('date_to')) {
+            $query->whereDate(
+                'created_at',
+                '<=',
+                $request->date_to
+            );
+        }
+
+
+        $histories = $query
+            ->latest()
+            ->paginate(5)
+            ->withQueryString();
+
+
+        $totalAttempts = OtpLoginHistory::where(
+            'client_id',
+            $client->id
+        )->count();
+
+        $successfulAttempts = OtpLoginHistory::where(
+            'client_id',
+            $client->id
+        )
+            ->where('status', 'success')
+            ->count();
+
+        $failedAttempts = OtpLoginHistory::where(
+            'client_id',
+            $client->id
+        )
+            ->where('status', 'failed')
+            ->count();
+
+
+        return view('client.otp-history', [
+            'histories' => $histories,
+            'totalAttempts' => $totalAttempts,
+            'successfulAttempts' => $successfulAttempts,
+            'failedAttempts' => $failedAttempts,
+        ]);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | FORGOT PASSWORD FORM
+    |--------------------------------------------------------------------------
+    */
 
     public function forgotPasswordForm()
     {
@@ -844,7 +815,11 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ SEND RESET OTP ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | SEND RESET OTP
+    |--------------------------------------------------------------------------
+    */
 
     public function sendResetOtp(Request $request)
     {
@@ -852,26 +827,21 @@ class ClientAuthController extends Controller
             'email' => 'required|email',
         ]);
 
-
         $client = Client::where(
             'email',
             $request->email
         )->first();
 
-
         if (!$client) {
-
-            return back()
-                ->withErrors([
-                    'email' => 'No account found with this email.',
-                ]);
+            return back()->withErrors([
+                'email' =>
+                'No account found with this email.',
+            ]);
         }
-
 
         $otp = random_int(100000, 999999);
 
         $token = Str::random(60);
-
 
         PasswordReset::create([
             'email' => $client->email,
@@ -880,22 +850,19 @@ class ClientAuthController extends Controller
             'expires_at' => now()->addMinutes(15),
         ]);
 
-
         Mail::raw(
-            "Your password reset OTP is: {$otp}\nThis OTP will expire in 15 minutes.",
+            "Your password reset OTP is: {$otp}\n\n"
+                . "This OTP will expire in 15 minutes.",
             function ($mail) use ($client) {
                 $mail->to($client->email)
-                    ->subject("Password Reset OTP");
+                    ->subject('Password Reset OTP');
             }
         );
-
 
         return redirect()
             ->route(
                 'client.reset.verify-otp',
-                [
-                    'token' => $token,
-                ]
+                ['token' => $token]
             )
             ->with(
                 'success',
@@ -904,17 +871,21 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ VERIFY RESET OTP FORM ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | VERIFY RESET OTP FORM
+    |--------------------------------------------------------------------------
+    */
 
     public function verifyResetOtpForm(
         Request $request,
         $token
     ) {
+
         $reset = PasswordReset::where(
             'token',
             $token
         )->first();
-
 
         if (
             !$reset ||
@@ -922,39 +893,39 @@ class ClientAuthController extends Controller
         ) {
 
             return redirect()
-                ->route('client.forgot-password')
+                ->route('client.forgot-password.form')
                 ->withErrors([
-                    'token' => 'Invalid or expired reset token.',
+                    'token' =>
+                    'Invalid or expired reset token.',
                 ]);
         }
 
-
-        return view(
-            'client.verify-reset-otp',
-            [
-                'token' => $token,
-                'email' => $reset->email,
-            ]
-        );
+        return view('client.verify-reset-otp', [
+            'token' => $token,
+            'email' => $reset->email,
+        ]);
     }
 
 
-    // ------------------ VERIFY RESET OTP ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | VERIFY RESET OTP
+    |--------------------------------------------------------------------------
+    */
 
     public function verifyResetOtp(
         Request $request,
         $token
     ) {
+
         $request->validate([
             'otp' => 'required|digits:6',
         ]);
-
 
         $reset = PasswordReset::where(
             'token',
             $token
         )->first();
-
 
         if (
             !$reset ||
@@ -962,28 +933,28 @@ class ClientAuthController extends Controller
         ) {
 
             return redirect()
-                ->route('client.forgot-password')
+                ->route('client.forgot-password.form')
                 ->withErrors([
-                    'token' => 'Invalid or expired reset token.',
+                    'token' =>
+                    'Invalid or expired reset token.',
                 ]);
         }
-
 
         if ((string) $reset->otp !== (string) $request->otp) {
 
-            return back()
-                ->withErrors([
-                    'otp' => 'Invalid OTP',
-                ]);
+            return back()->withErrors([
+                'otp' => 'Invalid OTP.',
+            ]);
         }
 
+        session([
+            'password_reset_verified_' . $token => true,
+        ]);
 
         return redirect()
             ->route(
-                'client.reset.password',
-                [
-                    'token' => $token,
-                ]
+                'client.reset.password.form',
+                ['token' => $token]
             )
             ->with(
                 'success',
@@ -992,79 +963,118 @@ class ClientAuthController extends Controller
     }
 
 
-    // ------------------ RESET PASSWORD FORM ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | RESET PASSWORD FORM
+    |--------------------------------------------------------------------------
+    */
 
     public function resetPasswordForm(
         Request $request,
         $token
     ) {
+
         $reset = PasswordReset::where(
             'token',
             $token
         )->first();
 
-
         if (!$reset) {
-
             return redirect()
-                ->route('client.forgot-password')
+                ->route('client.forgot-password.form')
                 ->withErrors([
                     'token' => 'Invalid token.',
                 ]);
         }
 
+        if (
+            !session(
+                'password_reset_verified_' . $token
+            )
+        ) {
+            return redirect()
+                ->route(
+                    'client.reset.verify-otp',
+                    ['token' => $token]
+                )
+                ->withErrors([
+                    'otp' =>
+                    'Please verify the OTP first.',
+                ]);
+        }
 
-        return view(
-            'client.reset-password',
-            [
-                'token' => $token,
-            ]
-        );
+        return view('client.reset-password', [
+            'token' => $token,
+        ]);
     }
 
 
-    // ------------------ RESET PASSWORD ------------------
+    /*
+    |--------------------------------------------------------------------------
+    | RESET PASSWORD
+    |--------------------------------------------------------------------------
+    */
 
     public function resetPassword(
         Request $request,
         $token
     ) {
+
         $request->validate([
-            'password' => 'required|min:6|confirmed',
+            'password' =>
+            'required|min:6|confirmed',
         ]);
 
+        if (
+            !session(
+                'password_reset_verified_' . $token
+            )
+        ) {
+            return redirect()
+                ->route(
+                    'client.reset.verify-otp',
+                    ['token' => $token]
+                )
+                ->withErrors([
+                    'otp' =>
+                    'Please verify the OTP first.',
+                ]);
+        }
 
         $reset = PasswordReset::where(
             'token',
             $token
         )->first();
 
-
         if (!$reset) {
-
             return redirect()
-                ->route('client.forgot-password')
+                ->route('client.forgot-password.form')
                 ->withErrors([
                     'token' => 'Invalid token.',
                 ]);
         }
 
+        if (now()->gt($reset->expires_at)) {
+            return redirect()
+                ->route('client.forgot-password.form')
+                ->withErrors([
+                    'token' =>
+                    'Password reset token has expired.',
+                ]);
+        }
 
         $client = Client::where(
             'email',
             $reset->email
         )->first();
 
-
         if (!$client) {
-
             return redirect()
-                ->route('client.forgot-password')
+                ->route('client.forgot-password.form')
                 ->withErrors([
                     'email' => 'Client not found.',
                 ]);
         }
-
 
         $client->password = Hash::make(
             $request->password
@@ -1072,12 +1082,14 @@ class ClientAuthController extends Controller
 
         $client->save();
 
-
         PasswordReset::where(
             'token',
             $token
         )->delete();
 
+        session()->forget(
+            'password_reset_verified_' . $token
+        );
 
         return redirect()
             ->route('client.login.form')
