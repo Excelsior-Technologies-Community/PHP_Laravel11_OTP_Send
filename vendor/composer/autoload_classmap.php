@@ -12,6 +12,7 @@ return array(
     'App\\Mail\\OtpMail' => $baseDir . '/app/Mail/OtpMail.php',
     'App\\Models\\Client' => $baseDir . '/app/Models/Client.php',
     'App\\Models\\OtpVerification' => $baseDir . '/app/Models/OtpVerification.php',
+    'App\\Models\\PasswordReset' => $baseDir . '/app/Models/PasswordReset.php',
     'App\\Models\\User' => $baseDir . '/app/Models/User.php',
     'App\\Notifications\\OtpSmsNotification' => $baseDir . '/app/Notifications/OtpSmsNotification.php',
     'App\\Providers\\AppServiceProvider' => $baseDir . '/app/Providers/AppServiceProvider.php',

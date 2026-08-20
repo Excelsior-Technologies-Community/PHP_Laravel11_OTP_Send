@@ -1,92 +1,168 @@
 @extends('client.layout')
 
 @section('content')
+
 <div class="auth-box">
-    <div class="auth-title">Verify OTP</div>
+
+    <div class="auth-title">
+        Verify OTP
+    </div>
+
 
     @if(session('success'))
-        <div class="alert alert-success">{{ session('success') }}</div>
+    <div class="alert alert-success">
+        {{ session('success') }}
+    </div>
     @endif
+
 
     @if($errors->any())
-        <div class="alert alert-danger">{{ $errors->first() }}</div>
+    <div class="alert alert-danger">
+        {{ $errors->first() }}
+    </div>
     @endif
 
-    <p class="text-center text-muted mb-3">Enter the 6-digit code sent to your email</p>
 
-    <form method="POST" action="{{ route('client.otp.verify') }}">
+    <div class="text-center mb-3">
+
+        @if($channel === 'sms')
+
+        <p class="text-muted">
+            Enter the 6-digit OTP sent to your phone.
+        </p>
+
+        @else
+
+        <p class="text-muted">
+            Enter the 6-digit OTP sent to your email.
+        </p>
+
+        @endif
+
+    </div>
+
+
+    <form method="POST"
+        action="{{ route('client.otp.verify') }}">
+
         @csrf
 
         <div class="mb-3">
-            <label class="form-label">Enter OTP</label>
-            <input name="otp" class="form-control" placeholder="6-digit code" required autofocus maxlength="6">
+
+            <label class="form-label">
+                Enter 6-digit OTP
+            </label>
+
+            <input
+                name="otp"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                maxlength="6"
+                class="form-control text-center"
+                style="font-size:24px;letter-spacing:8px;"
+                placeholder="••••••"
+                required
+                autofocus>
+
         </div>
 
-        <button class="btn btn-custom w-100 mt-2">Verify OTP</button>
 
-        <div class="text-center mt-3">
-            <a href="{{ route('client.login.form') }}">Back to Login</a>
-        </div>
+        <button
+            type="submit"
+            class="btn btn-custom w-100">
+            Verify OTP
+        </button>
+
     </form>
 
-    <div class="text-center mt-3">
-        <div id="countdown" class="text-muted mb-2" style="font-size: 14px;">
-            OTP Expires in: <span id="timer"></span>
+
+    <div class="text-center mt-4">
+
+        <div
+            id="countdown"
+            class="text-muted mb-2">
+            OTP Expires in:
+            <strong id="timer"></strong>
         </div>
-        <button type="button" class="btn btn-link p-0" id="resendBtn" onclick="resendOtp()" style="font-size:14px;">
-            Resend OTP
-        </button>
+
+
+        <form
+            method="POST"
+            action="{{ route('client.login.resendOtp') }}">
+
+            @csrf
+
+            <button
+                type="submit"
+                id="resendBtn"
+                class="btn btn-link">
+                Resend OTP
+            </button>
+
+        </form>
+
     </div>
+
+
+    <div class="text-center mt-3">
+
+        <a href="{{ route('client.login.form') }}">
+            Back to Login
+        </a>
+
+    </div>
+
 </div>
 
-<form id="resendForm" action="{{ route('client.login.resendOtp') }}" method="POST" style="display:none;">
-    @csrf
-</form>
 
 <script>
-    var countdownSeconds = {{ isset($expires_at) ? max(1, $expires_at->getTimestamp() - time()) : 300 }};
-    var resendCooldown = 0;
+    let countdownSeconds = {
+        {
+            isset($expires_at) && $expires_at ?
+                max(0, $expires_at - > getTimestamp() - time()) :
+                0
+        }
+    };
+
+    let timerElement =
+        document.getElementById('timer');
+
+    let resendButton =
+        document.getElementById('resendBtn');
+
 
     function updateTimer() {
         if (countdownSeconds <= 0) {
-            document.getElementById('timer').textContent = 'Expired';
-            document.getElementById('timer').style.color = 'red';
-            document.getElementById('resendBtn').disabled = false;
+
+            timerElement.textContent =
+                'Expired';
+
+            resendButton.disabled = false;
+
             return;
         }
-        var mins = Math.floor(countdownSeconds / 60);
-        var secs = countdownSeconds % 60;
-        document.getElementById('timer').textContent = mins + ':' + (secs < 10 ? '0' : '') + secs;
-        if (secs <= 10 && mins === 0) {
-            document.getElementById('timer').style.color = 'red';
-        }
+
+
+        let minutes =
+            Math.floor(countdownSeconds / 60);
+
+        let seconds =
+            countdownSeconds % 60;
+
+
+        timerElement.textContent =
+            minutes + ':' +
+            String(seconds).padStart(2, '0');
+
+
         countdownSeconds--;
     }
 
-    function resendOtp() {
-        if (resendCooldown > 0) return;
-        document.getElementById('resendBtn').disabled = true;
-        document.getElementById('resendBtn').textContent = 'Sending...';
-        document.getElementById('resendForm').submit();
-    }
 
     updateTimer();
-    setInterval(updateTimer, 1000);
 
-    setTimeout(function() {
-        document.getElementById('resendBtn').disabled = true;
-        document.getElementById('resendBtn').textContent = 'Wait 30s';
-        resendCooldown = 30;
-        var cooldownInterval = setInterval(function() {
-            resendCooldown--;
-            if (resendCooldown <= 0) {
-                clearInterval(cooldownInterval);
-                document.getElementById('resendBtn').disabled = false;
-                document.getElementById('resendBtn').textContent = 'Resend OTP';
-            } else {
-                document.getElementById('resendBtn').textContent = 'Wait ' + resendCooldown + 's';
-            }
-        }, 1000);
-    }, 30000);
+    setInterval(updateTimer, 1000);
 </script>
+
 @endsection
