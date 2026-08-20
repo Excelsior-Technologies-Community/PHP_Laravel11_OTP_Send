@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\ClientAuthController;
+use App\Http\Controllers\AdminOtpHistoryController;
 
 // ------------------ CLIENT REGISTRATION ROUTES ------------------
 Route::get('client/register', [ClientAuthController::class, 'registerForm'])->name('client.register.form');
@@ -32,6 +33,14 @@ Route::get('client/reset/verify-otp/{token}', [ClientAuthController::class, 'ver
 Route::post('client/reset/verify-otp/{token}', [ClientAuthController::class, 'verifyResetOtp'])->name('client.reset.verify-otp.submit');
 Route::get('client/reset/password/{token}', [ClientAuthController::class, 'resetPasswordForm'])->name('client.reset.password.form');
 Route::post('client/reset/password/{token}', [ClientAuthController::class, 'resetPassword'])->name('client.reset.password');
+
+// ------------------ ADMIN OTP HISTORY ------------------
+
+Route::get(
+    '/admin/otp-history',
+    [AdminOtpHistoryController::class, 'index']
+)->name('admin.otp-history.index');
+
 
 // ------------------ HOME ROUTE ------------------
 Route::get('/', function () {
